@@ -133,7 +133,7 @@ Recipie/
    - Check connection string in `backend/src/main/resources/application.properties`
 
 2. **Port Already in Use**
-   - Backend runs on port 4041, frontend on port 3000
+   - Backend runs on port 4041, frontend on port 5173
    - Change ports in configuration files if needed
 
 3. **Java Version Issues**
@@ -156,7 +156,7 @@ The application will automatically load recipe data from `US_recipes.json` on fi
 If you encounter any issues, please check:
 1. All prerequisites are installed
 2. MongoDB is running
-3. Ports 4041 and 3000 are available
+3. Ports 4041 and 5173 are available
 4. Java version is 17+
 
 Enjoy exploring recipes! 🍳
