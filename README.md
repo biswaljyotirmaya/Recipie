@@ -67,11 +67,11 @@ npm install
 npm start
 ```
 
-The frontend will start on http://localhost:3000
+The frontend will start on http://localhost:5173
 
 ### 4. Verify the Application
 
-1. Open your browser and go to http://localhost:3000
+1. Open your browser and go to http://localhost:5173
 2. You should see the Recipe Explorer application
 3. The backend should be running on http://localhost:4041
 
