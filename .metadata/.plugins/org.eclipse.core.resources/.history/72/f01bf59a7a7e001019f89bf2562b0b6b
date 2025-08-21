@@ -1,0 +1,60 @@
+package com.jb.controller;
+
+import com.jb.entity.Recipe;
+import com.jb.service.RecipeService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.HashMap;
+import java.util.Map;
+
+@RestController
+@RequestMapping("/api/recipes")
+public class RecipeController {
+
+    @Autowired
+    private RecipeService recipeService;
+
+    @GetMapping
+    public ResponseEntity<Map<String, Object>> getAllRecipes(
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "10") int limit) {
+
+        Page<Recipe> recipes = recipeService.getAllRecipes(page, limit);
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("page", page);
+        response.put("limit", limit); // Fixed typo
+        response.put("total", recipes.getTotalElements());
+        response.put("data", recipes.getContent());
+
+        return ResponseEntity.ok(response);
+    }
+
+    @GetMapping("/search")
+    public ResponseEntity<Map<String, Object>> searchRecipes(
+            @RequestParam(required = false) String title,
+            @RequestParam(required = false) String cuisine,
+            @RequestParam(required = false) Float minRating,
+            @RequestParam(required = false) Float maxRating,
+            @RequestParam(required = false) Integer maxTotalTime,
+            @RequestParam(required = false) Float maxCalories,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "10") int limit) {
+
+        Page<Recipe> recipes = recipeService.searchRecipes(title, cuisine, minRating, maxRating, maxTotalTime, maxCalories, page, limit);
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("page", page);
+        response.put("limit", limit);
+        response.put("total", recipes.getTotalElements());
+        response.put("data", recipes.getContent());
+
+        return ResponseEntity.ok(response);
+    }
+}

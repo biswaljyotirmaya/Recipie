@@ -1,0 +1,30 @@
+package com.jb.repository;
+
+import com.jb.entity.Recipe;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+
+import java.util.List;
+
+public interface RecipeRepository extends JpaRepository<Recipe, Long> {
+
+	List<Recipe> findByTitleContainingIgnoreCase(String title);
+
+	List<Recipe> findByCuisine(String cuisine);
+
+	@Query("""
+			SELECT r FROM Recipe r
+			WHERE (:title IS NULL OR LOWER(r.title) LIKE LOWER(CONCAT('%', :title, '%')))
+			AND (:cuisine IS NULL OR r.cuisine = :cuisine)
+			AND (:minRating IS NULL OR r.rating >= :minRating)
+			AND (:maxRating IS NULL OR r.rating <= :maxRating)
+			AND (:maxTotalTime IS NULL OR r.totalTime <= :maxTotalTime)
+			AND (:maxCalories IS NULL OR CAST(REPLACE(JSON_EXTRACT(r.nutrients, '$.calories'), ' kcal', '') AS DECIMAL) <= :maxCalories)
+			""")
+	Page<Recipe> searchRecipes(@Param("title") String title, @Param("cuisine") String cuisine,
+			@Param("minRating") Float minRating, @Param("maxRating") Float maxRating,
+			@Param("maxTotalTime") Integer maxTotalTime, @Param("maxCalories") Float maxCalories, Pageable pageable);
+}

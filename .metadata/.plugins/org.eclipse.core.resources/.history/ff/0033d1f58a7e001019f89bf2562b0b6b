@@ -1,0 +1,129 @@
+package com.jb.service;
+
+import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.stereotype.Service;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jb.entity.Recipe;
+import com.jb.repository.RecipeRepository;
+
+import jakarta.annotation.PostConstruct;
+
+@Service
+public class RecipeService {
+
+    @Autowired
+    private RecipeRepository recipeRepository;
+    
+    @Autowired
+    private MongoTemplate mongoTemplate;
+
+    @PostConstruct
+    public void loadRecipes() {
+        if (recipeRepository.count() > 0) {
+            return; // Skip if already loaded
+        }
+
+        try (InputStream is = getClass().getResourceAsStream("/US_recipes.json")) {
+            ObjectMapper mapper = new ObjectMapper();
+            Map<String, Object> data = mapper.readValue(is, Map.class);
+            
+            List<Recipe> recipes = new ArrayList<>();
+            for (Map.Entry<String, Object> entry : data.entrySet()) {
+                Map<String, Object> recipeData = (Map<String, Object>) entry.getValue();
+                Recipe recipe = convertToRecipe(recipeData);
+                if (recipe != null) {
+                    recipes.add(recipe);
+                }
+            }
+            
+            recipeRepository.saveAll(recipes);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private Recipe convertToRecipe(Map<String, Object> data) {
+        try {
+            Recipe recipe = new Recipe();
+            
+            recipe.setCuisine((String) data.get("cuisine"));
+            recipe.setTitle((String) data.get("title"));
+            
+            // Handle rating (convert NaN to null)
+            Object rating = data.get("rating");
+            if (rating instanceof Number) {
+                double ratingValue = ((Number) rating).doubleValue();
+                recipe.setRating(Double.isNaN(ratingValue) ? null : (Float) ratingValue);
+            }
+            
+            // Handle times (convert negative to null)
+            recipe.setPrepTime(parseTime(data.get("prep_time")));
+            recipe.setCookTime(parseTime(data.get("cook_time")));
+            recipe.setTotalTime(parseTime(data.get("total_time")));
+            
+            recipe.setDescription((String) data.get("description"));
+            recipe.setNutrients(data.get("nutrients"));
+            recipe.setServes((String) data.get("serves"));
+            
+            return recipe;
+        } catch (Exception e) {
+            e.printStackTrace();
+            return null;
+        }
+    }
+
+    private Integer parseTime(Object time) {
+        if (time instanceof Number) {
+            int value = ((Number) time).intValue();
+            return value >= 0 ? value : null;
+        }
+        return null;
+    }
+
+    public Page<Recipe> getAllRecipes(int page, int limit) {
+        Pageable pageable = PageRequest.of(page - 1, limit, Sort.by("rating").descending());
+        return recipeRepository.findAll(pageable);
+    }
+
+    public Page<Recipe> searchRecipes(String title, String cuisine, Float minRating, 
+                                     Integer maxTotalTime, int page, int limit) {
+        
+        Query query = new Query();
+        
+        if (title != null && !title.isEmpty()) {
+            query.addCriteria(Criteria.where("title").regex(title, "i"));
+        }
+        
+        if (cuisine != null && !cuisine.isEmpty()) {
+            query.addCriteria(Criteria.where("cuisine").is(cuisine));
+        }
+        
+        if (minRating != null) {
+            query.addCriteria(Criteria.where("rating").gte(minRating));
+        }
+        
+        if (maxTotalTime != null) {
+            query.addCriteria(Criteria.where("total_time").lte(maxTotalTime));
+        }
+        
+        long total = mongoTemplate.count(query, Recipe.class);
+        query.with(PageRequest.of(page - 1, limit, Sort.by("rating").descending()));
+        
+        List<Recipe> recipes = mongoTemplate.find(query, Recipe.class);
+        return new PageImpl<>(recipes, PageRequest.of(page - 1, limit), total);
+    }
+}

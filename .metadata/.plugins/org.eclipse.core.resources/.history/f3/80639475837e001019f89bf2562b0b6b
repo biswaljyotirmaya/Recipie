@@ -1,0 +1,150 @@
+package com.jb.service;
+
+import java.io.InputStream;
+import java.util.List;
+import java.util.Map;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.stereotype.Service;
+
+import com.fasterxml.jackson.core.json.JsonReadFeature;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.json.JsonMapper;
+import com.jb.entity.Recipe;
+import com.jb.repository.RecipeRepository;
+
+import jakarta.annotation.PostConstruct;
+
+@Service
+public class RecipeService {
+
+    private static final Logger logger = LoggerFactory.getLogger(RecipeService.class);
+
+    @Autowired
+    private RecipeRepository recipeRepository;
+
+    @Autowired
+    private MongoTemplate mongoTemplate;
+
+    /**
+     * Load recipes from JSON file in classpath at startup.
+     */
+    @PostConstruct
+    public void loadRecipes() {
+        try (InputStream is = getClass().getResourceAsStream("/US_recipes.json")) {
+            if (is == null) {
+                logger.warn("recipes JSON file not found in resources!");
+                return;
+            }
+
+            ObjectMapper mapper = JsonMapper.builder()
+                    .enable(JsonReadFeature.ALLOW_NON_NUMERIC_NUMBERS)
+                    .build();
+
+            // Read top-level map from JSON
+            Map<String, Object> jsonMap = mapper.readValue(is, new TypeReference<Map<String, Object>>() {});
+
+            // Extract "recipes" list from JSON
+            List<Recipe> recipes = mapper.convertValue(jsonMap.get("recipes"), new TypeReference<List<Recipe>>() {});
+            if (recipes == null || recipes.isEmpty()) {
+                logger.warn("No recipes found in JSON file!");
+                return;
+            }
+
+            // Optional: clean invalid data
+            recipes.forEach(this::sanitizeRecipe);
+
+            recipeRepository.saveAll(recipes);
+            logger.info("Loaded {} recipes successfully", recipes.size());
+
+        } catch (Exception e) {
+            logger.error("Failed to load recipes from JSON file", e);
+        }
+    }
+
+    /**
+     * Sanitize recipe fields to avoid bad data
+     */
+    private void sanitizeRecipe(Recipe recipe) {
+        // Clean invalid rating
+        if (recipe.getRating() != null && (recipe.getRating().isNaN() || recipe.getRating().isInfinite())) {
+            recipe.setRating(null);
+        }
+
+        // Clean negative times
+        if (recipe.getPrepTime() != null && recipe.getPrepTime() < 0) recipe.setPrepTime(null);
+        if (recipe.getCookTime() != null && recipe.getCookTime() < 0) recipe.setCookTime(null);
+        if (recipe.getTotalTime() != null && recipe.getTotalTime() < 0) recipe.setTotalTime(null);
+
+        // Initialize nutrients map if null
+        if (recipe.getNutrients() == null) recipe.setNutrients(Map.of());
+
+        // Parse calories from nutrients
+        String caloriesStr = recipe.getNutrients().get("calories");
+        if (caloriesStr != null && caloriesStr.endsWith(" kcal")) {
+            try {
+                recipe.setCalories(Float.parseFloat(caloriesStr.replace(" kcal", "").trim()));
+            } catch (NumberFormatException e) {
+                recipe.setCalories(null);
+            }
+        } else {
+            recipe.setCalories(null);
+        }
+    }
+
+    /**
+     * Fetch all recipes with pagination, sorted by rating descending
+     */
+    public Page<Recipe> getAllRecipes(int page, int limit) {
+        Pageable pageable = PageRequest.of(page - 1, limit, Sort.by("rating").descending());
+        return recipeRepository.findAll(pageable);
+    }
+
+    /**
+     * Search recipes with filters and pagination
+     */
+    public Page<Recipe> searchRecipes(String title, String cuisine, Float minRating, Float maxRating,
+                                      Integer maxTotalTime, Float maxCalories, int page, int limit) {
+
+        Query query = new Query();
+
+        if (title != null && !title.isBlank()) {
+            query.addCriteria(Criteria.where("title").regex(title, "i"));
+        }
+        if (cuisine != null && !cuisine.isBlank()) {
+            query.addCriteria(Criteria.where("cuisine").is(cuisine));
+        }
+        if (minRating != null) {
+            query.addCriteria(Criteria.where("rating").gte(minRating));
+        }
+        if (maxRating != null) {
+            query.addCriteria(Criteria.where("rating").lte(maxRating));
+        }
+        if (maxTotalTime != null) {
+            query.addCriteria(Criteria.where("total_time").lte(maxTotalTime));
+        }
+        if (maxCalories != null) {
+            query.addCriteria(Criteria.where("calories").lte(maxCalories));
+        }
+
+        long total = mongoTemplate.count(query, Recipe.class);
+
+        Pageable pageable = PageRequest.of(page - 1, limit, Sort.by("rating").descending());
+        query.with(pageable);
+
+        List<Recipe> content = mongoTemplate.find(query, Recipe.class);
+
+        return new PageImpl<>(content, pageable, total);
+    }
+}

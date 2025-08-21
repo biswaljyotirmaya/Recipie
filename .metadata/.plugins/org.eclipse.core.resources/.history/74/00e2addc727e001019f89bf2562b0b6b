@@ -1,0 +1,19 @@
+@Service
+public class RecipeService {
+    @Autowired
+    private RecipeRepository recipeRepository;
+
+    public Page<Recipe> getAllRecipes(int page, int limit) {
+        Pageable pageable = PageRequest.of(page - 1, limit, Sort.by("rating").descending());
+        return recipeRepository.findAll(pageable);
+    }
+
+    public List<Recipe> searchRecipes(String title, String cuisine, 
+                                      Float minRating, Float maxRating,
+                                      Integer maxTotalTime) {
+        // Custom search logic with Specification
+        // e.g. filter title LIKE, rating >=, etc.
+        // I'll expand this with JPA Specification
+        return recipeRepository.findAll(RecipeSpecification.search(title, cuisine, minRating, maxRating, maxTotalTime));
+    }
+}

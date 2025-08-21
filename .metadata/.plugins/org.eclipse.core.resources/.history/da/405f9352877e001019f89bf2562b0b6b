@@ -1,0 +1,13 @@
+package com.jb.repository;
+
+import java.util.List;
+
+import org.springframework.data.mongodb.repository.MongoRepository;
+
+import com.jb.entity.Recipe;
+
+public interface RecipeRepository extends MongoRepository<Recipe, String> {
+	List<Recipe> findByTitleContainingIgnoreCase(String title);
+
+	List<Recipe> findByCuisine(String cuisine);
+}

@@ -1,0 +1,34 @@
+package com.jb.entity;
+
+import java.util.List;
+
+import org.springframework.data.annotation.Id;
+import org.springframework.data.mongodb.core.mapping.Document;
+
+import lombok.Data;
+
+@Document(collection = "recipes")
+@Data
+public class Recipe {
+
+    @Id
+    private String id;
+    private String continent;
+    private String countryState;
+    private String cuisine;
+    private String title;
+    private String url;
+    private Double rating;
+    private Integer totalTime;
+    private Integer prepTime;
+    private Integer cookTime;
+    private String description;
+    private String serves;
+    private List<String> ingredients;
+    private List<String> instructions;
+    private Nutrients nutrients;
+		// TODO Auto-generated method stub
+		
+	}
+
+}

@@ -1,0 +1,16 @@
+spring.application.name=Recipes
+server.port=4041
+
+# MongoDB Configuration
+spring.data.mongodb.uri=mongodb://localhost:27017/recipes_db
+spring.data.mongodb.database=recipes_db
+
+
+# Logging Configuration (for debugging)
+logging.level.org.springframework=DEBUG
+logging.level.com.jb=DEBUG
+logging.level.com.fasterxml.jackson=DEBUG
+
+# Disable JPA auto-configuration
+spring.jpa.hibernate.ddl-auto=none
+spring.datasource.initialization-mode=never

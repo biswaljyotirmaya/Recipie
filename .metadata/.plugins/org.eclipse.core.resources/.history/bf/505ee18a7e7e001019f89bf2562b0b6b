@@ -1,0 +1,138 @@
+package com.jb.service;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.json.JsonMapper;
+import com.fasterxml.jackson.core.JsonReadFeature;
+import com.jb.entity.Recipe;
+import com.jb.repository.RecipeRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.stereotype.Service;
+
+import jakarta.annotation.PostConstruct;
+import java.io.File;
+import java.util.List;
+import java.util.Map;
+
+@Service
+public class RecipeService {
+
+    private static final Logger logger = LoggerFactory.getLogger(RecipeService.class);
+
+    @Autowired
+    private RecipeRepository recipeRepository;
+
+    @Autowired
+    private MongoTemplate mongoTemplate;
+
+    @PostConstruct
+    public void loadRecipes() {
+        try {
+            ObjectMapper mapper = JsonMapper.builder()
+                    .enable(JsonReadFeature.ALLOW_NON_NUMERIC_NUMBERS)
+                    .build();
+            File file = new File("C:/Users/JYOTI/Downloads/US_recipes.json");
+
+            // Read JSON as a Map to handle object structure
+            Map<String, Object> jsonMap = mapper.readValue(file, new TypeReference<Map<String, Object>>() {});
+            logger.info("JSON top-level keys: {}", jsonMap.keySet());
+
+            List<Recipe> recipes = null;
+            for (Map.Entry<String, Object> entry : jsonMap.entrySet()) {
+                if (entry.getValue() instanceof List) {
+                    try {
+                        recipes = mapper.convertValue(entry.getValue(), new TypeReference<List<Recipe>>() {});
+                        logger.info("Found recipe array under key: {}", entry.getKey());
+                        break;
+                    } catch (Exception e) {
+                        logger.warn("Failed to deserialize array under key '{}': {}", entry.getKey(), e.getMessage());
+                    }
+                }
+            }
+
+            if (recipes == null) {
+                throw new RuntimeException("No valid recipe array found in JSON. Top-level keys: " + jsonMap.keySet());
+            }
+
+            for (Recipe recipe : recipes) {
+                if (recipe.getRating() != null && (recipe.getRating().isNaN() || recipe.getRating().isInfinite())) {
+                    recipe.setRating(null);
+                }
+                if (recipe.getPrepTime() != null && recipe.getPrepTime() < 0) {
+                    recipe.setPrepTime(null);
+                }
+                if (recipe.getCookTime() != null && recipe.getCookTime() < 0) {
+                    recipe.setCookTime(null);
+                }
+                if (recipe.getTotalTime() != null && recipe.getTotalTime() < 0) {
+                    recipe.setTotalTime(null);
+                }
+                if (recipe.getNutrients() == null) {
+                    recipe.setNutrients(Map.of());
+                }
+                String caloriesStr = recipe.getNutrients().get("calories");
+                if (caloriesStr != null && caloriesStr.endsWith(" kcal")) {
+                    try {
+                        recipe.setCalories(Float.parseFloat(caloriesStr.replace(" kcal", "")));
+                    } catch (NumberFormatException e) {
+                        recipe.setCalories(null);
+                        logger.warn("Invalid calories format for recipe '{}': {}", recipe.getTitle(), caloriesStr);
+                    }
+                } else {
+                    recipe.setCalories(null);
+                }
+            }
+
+            recipeRepository.saveAll(recipes);
+            logger.info("Successfully loaded {} recipes to MongoDB", recipes.size());
+        } catch (Exception e) {
+            logger.error("Failed to load recipes from JSON file", e);
+            throw new RuntimeException("Failed to load recipes", e);
+        }
+    }
+
+    public Page<Recipe> getAllRecipes(int page, int limit) {
+        Pageable pageable = PageRequest.of(page - 1, limit, Sort.by("rating").descending());
+        return recipeRepository.findAll(pageable);
+    }
+
+    public Page<Recipe> searchRecipes(String title, String cuisine, Float minRating, Float maxRating,
+                                      Integer maxTotalTime, Float maxCalories, int page, int limit) {
+        Query query = new Query();
+        if (title != null && !title.isEmpty()) {
+            query.addCriteria(Criteria.where("title").regex(title, "i"));
+        }
+        if (cuisine != null && !cuisine.isEmpty()) {
+            query.addCriteria(Criteria.where("cuisine").is(cuisine));
+        }
+        if (minRating != null) {
+            query.addCriteria(Criteria.where("rating").gte(minRating));
+        }
+        if (maxRating != null) {
+            query.addCriteria(Criteria.where("rating").lte(maxRating));
+        }
+        if (maxTotalTime != null) {
+            query.addCriteria(Criteria.where("total_time").lte(maxTotalTime));
+        }
+        if (maxCalories != null) {
+            query.addCriteria(Criteria.where("calories").lte(maxCalories));
+        }
+
+        long total = mongoTemplate.count(query, Recipe.class);
+        Pageable pageable = PageRequest.of(page - 1, limit, Sort.by("rating").descending());
+        query.with(pageable);
+        List<Recipe> content = mongoTemplate.find(query, Recipe.class);
+
+        return new PageImpl<>(content, pageable, total);
+    }
+}

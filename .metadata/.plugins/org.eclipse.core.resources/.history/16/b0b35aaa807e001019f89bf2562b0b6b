@@ -1,0 +1,42 @@
+package com.jb.entity;
+
+import lombok.*;
+import org.springframework.data.annotation.Id;
+import org.springframework.data.mongodb.core.mapping.Document;
+import org.springframework.data.mongodb.core.mapping.Field;
+
+import java.util.Map;
+
+@Document(collection = "recipes")
+@Getter
+@Setter
+@NoArgsConstructor
+@AllArgsConstructor
+public class Recipe {
+
+    @Id
+    private Long id;
+
+    private String cuisine;
+
+    private String title;
+
+    private Float rating;
+
+    @Field("prep_time")
+    private Integer prepTime;
+
+    @Field("cook_time")
+    private Integer cookTime;
+
+    @Field("total_time")
+    private Integer totalTime;
+
+    private String description;
+
+    private Map<String, String> nutrients;
+
+    private String serves;
+
+    private Float calories;
+}

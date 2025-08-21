@@ -1,0 +1,54 @@
+package com.jb.service;
+
+import java.io.File;
+import java.util.List;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.stereotype.Service;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jb.entity.Recipe;
+import com.jb.repository.RecipeRepository;
+
+import jakarta.annotation.PostConstruct;
+
+@Service
+public class RecipeService {
+
+	@Autowired
+	private RecipeRepository recipeRepository;
+
+	// Load recipes from JSON
+	@PostConstruct
+	public void loadRecipes() {
+		try {
+			ObjectMapper mapper = new ObjectMapper();
+			File file = new File("C:/Users/JYOTI/Downloads/US_recipes.json");
+
+			List<Recipe> recipes = mapper.readValue(file, new TypeReference<List<Recipe>>() {
+			});
+			recipeRepository.saveAll(recipes);
+
+			System.out.println("Recipes loaded successfully!");
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+
+	// Get paginated recipes (sorted by rating descending)
+	public Page<Recipe> getAllRecipes(int page, int limit) {
+		Pageable pageable = PageRequest.of(page - 1, limit, Sort.by("rating").descending());
+		return recipeRepository.findAll(pageable);
+	}
+
+	// Dynamic search using repository @Query
+	public List<Recipe> searchRecipes(String title, String cuisine, Float minRating, Float maxRating,
+			Integer maxTotalTime) {
+		return recipeRepository.searchRecipes(title, cuisine, minRating, maxRating, maxTotalTime);
+	}
+}

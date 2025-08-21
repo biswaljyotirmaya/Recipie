@@ -1,0 +1,24 @@
+@Entity
+@Table(name = "recipes")
+public class Recipe {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    private String cuisine;
+    private String title;
+    private Float rating;
+    private Integer prepTime;
+    private Integer cookTime;
+    private Integer totalTime;
+
+    @Column(columnDefinition = "TEXT")
+    private String description;
+
+    @Column(columnDefinition = "JSON")
+    private String nutrients;  // store as JSON string
+
+    private String serves;
+
+    // getters & setters
+}

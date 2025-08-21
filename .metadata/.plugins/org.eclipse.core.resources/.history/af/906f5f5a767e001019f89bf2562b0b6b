@@ -1,0 +1,43 @@
+package com.jb.service;
+
+import java.util.List;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.stereotype.Service;
+
+import com.jb.entity.Recipe;
+import com.jb.repository.RecipeRepository;
+
+@Service
+public class RecipeService {
+
+	@Autowired
+	private RecipeRepository recipeRepository;
+	@PostConstruct
+    public void loadRecipes() {
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            File file = new File("src/main/resources/json/recipes.json");
+
+            List<Recipe> recipes = mapper.readValue(file, new TypeReference<List<Recipe>>() {});
+            recipeRepository.saveAll(recipes);
+
+            System.out.println("Recipes loaded successfully!");
+        }catch (Exception e) {
+			e.printStackTrace();
+		}
+
+	public Page<Recipe> getAllRecipes(int page, int limit) {
+		Pageable pageable = PageRequest.of(page - 1, limit, Sort.by("rating").descending());
+		return recipeRepository.findAll(pageable);
+	}
+
+	public List<Recipe> searchRecipes(String title, String cuisine, Float minRating, Float maxRating,
+			Integer maxTotalTime) {
+		return recipeRepository.searchRecipes(title, cuisine, minRating, maxRating, maxTotalTime);
+	}
+}

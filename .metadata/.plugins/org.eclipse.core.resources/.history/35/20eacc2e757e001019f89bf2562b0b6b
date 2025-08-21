@@ -1,0 +1,13 @@
+package com.jb.repository;
+
+import java.util.List;
+
+import org.springframework.data.jpa.repository.JpaRepository;
+
+import com.jb.entity.Recipe;
+
+public interface RecipeRepository extends JpaRepository<Recipe, Long>{
+	List<Recipe> findByTitleContainingIgnoreCase(String title);
+
+	List<Recipe> findByCuisine(String cuisine);
+}

@@ -1,0 +1,248 @@
+package com.jb.service;
+
+import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
+
+import com.fasterxml.jackson.core.json.JsonReadFeature;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.json.JsonMapper;
+import com.jb.entity.Nutrients;
+import com.jb.entity.Recipe;
+import com.jb.repository.RecipeRepository;
+
+import jakarta.annotation.PostConstruct;
+
+@Service
+public class RecipeService {
+
+    private static final Logger logger = LoggerFactory.getLogger(RecipeService.class);
+
+    @Autowired
+    private RecipeRepository recipeRepository;
+
+    @Autowired
+    private MongoTemplate mongoTemplate;
+
+    @PostConstruct
+    public void loadRecipes() {
+        try {
+            // Check if recipes already exist to avoid duplicate loading
+            if (recipeRepository.count() == 0) {
+                List<Recipe> recipes = readRecipesFromJson("/US_recipes.json");
+                
+                if (recipes == null || recipes.isEmpty()) {
+                    logger.warn("No recipes found to load.");
+                    return;
+                }
+
+                // Filter null recipes, sanitize, and save
+                List<Recipe> validRecipes = recipes.stream()
+                    .filter(Objects::nonNull)
+                    .peek(this::sanitizeRecipe)
+                    .toList();
+
+                recipeRepository.saveAll(validRecipes);
+                logger.info("Loaded {} recipes successfully.", validRecipes.size());
+            } else {
+                logger.info("Recipes already loaded. Skipping initialization.");
+            }
+            
+        } catch (Exception e) {
+            logger.error("Failed to load recipes during initialization", e);
+        }
+    }
+
+    private List<Recipe> readRecipesFromJson(String path) {
+        try (InputStream is = getClass().getResourceAsStream(path)) {
+            if (is == null) {
+                logger.warn("JSON file '{}' not found in resources!", path);
+                return List.of();
+            }
+
+            JsonMapper mapper = JsonMapper.builder()
+                .enable(JsonReadFeature.ALLOW_NON_NUMERIC_NUMBERS)
+                .build();
+
+            // Read the JSON as a Map<String, Recipe>
+            Map<String, Recipe> jsonMap = mapper.readValue(is, new TypeReference<Map<String, Recipe>>() {});
+            
+            // Extract the values (recipes) from the map
+            return new ArrayList<>(jsonMap.values());
+            
+        } catch (Exception e) {
+            logger.error("Failed to read recipes JSON from path: {}", path, e);
+            return List.of();
+        }
+    }
+
+    private void sanitizeRecipe(Recipe recipe) {
+        if (recipe == null) return;
+
+        // Clean rating
+        if (recipe.getRating() != null && (recipe.getRating().isNaN() || recipe.getRating().isInfinite())) {
+            recipe.setRating(null);
+        }
+
+        // Clean negative times
+        if (recipe.getPrepTime() != null && recipe.getPrepTime() < 0)
+            recipe.setPrepTime(null);
+        if (recipe.getCookTime() != null && recipe.getCookTime() < 0)
+            recipe.setCookTime(null);
+        if (recipe.getTotalTime() != null && recipe.getTotalTime() < 0)
+            recipe.setTotalTime(null);
+
+        // Handle nutrients - ensure it's not null
+        if (recipe.getNutrients() == null) {
+            recipe.setNutrients(new Nutrients());
+        }
+
+        // Parse calories into the transient field
+        Nutrients nutrients = recipe.getNutrients();
+        if (nutrients != null) {
+            String caloriesStr = nutrients.getCalories();
+            if (caloriesStr != null && caloriesStr.endsWith(" kcal")) {
+                try {
+                    recipe.setCalories(Float.parseFloat(caloriesStr.replace(" kcal", "").trim()));
+                } catch (NumberFormatException e) {
+                    recipe.setCalories(null);
+                    logger.debug("Failed to parse calories: {}", caloriesStr);
+                }
+            } else {
+                recipe.setCalories(null);
+            }
+        }
+    }
+
+    public Page<Recipe> getAllRecipes(int page, int limit) {
+        try {
+            Pageable pageable = PageRequest.of(
+                Math.max(0, page - 1), 
+                Math.max(1, limit), 
+                Sort.by("rating").descending().and(Sort.by("title"))
+            );
+            return recipeRepository.findAll(pageable);
+        } catch (Exception e) {
+            logger.error("Error fetching all recipes", e);
+            return Page.empty();
+        }
+    }
+
+    public Page<Recipe> searchRecipes(String title, String cuisine, Float minRating, Float maxRating,
+            Integer maxTotalTime, Float maxCalories, int page, int limit) {
+
+        try {
+            Query query = new Query();
+            Criteria criteria = new Criteria();
+
+            List<Criteria> criteriaList = new ArrayList<>();
+
+            if (StringUtils.hasText(title))
+                criteriaList.add(Criteria.where("title").regex(title, "i"));
+            
+            if (StringUtils.hasText(cuisine))
+                criteriaList.add(Criteria.where("cuisine").is(cuisine));
+            
+            if (minRating != null)
+                criteriaList.add(Criteria.where("rating").gte(minRating));
+            
+            if (maxRating != null)
+                criteriaList.add(Criteria.where("rating").lte(maxRating));
+            
+            if (maxTotalTime != null)
+                criteriaList.add(Criteria.where("total_time").lte(maxTotalTime));
+            
+            // Note: calories is a transient field, so it won't be searchable in MongoDB
+            // You might need to store it in the database or handle this differently
+            if (maxCalories != null) {
+                logger.warn("Calories filtering is not supported as it's a transient field");
+            }
+
+            if (!criteriaList.isEmpty()) {
+                query.addCriteria(criteria.andOperator(criteriaList.toArray(new Criteria[0])));
+            }
+
+            long total = mongoTemplate.count(query, Recipe.class);
+
+            Pageable pageable = PageRequest.of(
+                Math.max(0, page - 1), 
+                Math.max(1, limit), 
+                Sort.by("rating").descending().and(Sort.by("title"))
+            );
+            
+            query.with(pageable);
+            List<Recipe> content = mongoTemplate.find(query, Recipe.class);
+
+            // If calories filtering is needed, we have to do it in memory
+            if (maxCalories != null) {
+                content = content.stream()
+                    .filter(recipe -> recipe.getCalories() != null && recipe.getCalories() <= maxCalories)
+                    .toList();
+                total = content.size(); // Update total after filtering
+            }
+
+            return new PageImpl<>(content, pageable, total);
+            
+        } catch (Exception e) {
+            logger.error("Error searching recipes", e);
+            return Page.empty();
+        }
+    }
+
+    // Additional utility methods
+    public Optional<Recipe> findById(String id) {
+        try {
+            return recipeRepository.findById(id);
+        } catch (Exception e) {
+            logger.error("Error finding recipe by id: {}", id, e);
+            return Optional.empty();
+        }
+    }
+
+    public List<String> findAllCuisines() {
+        try {
+            return mongoTemplate.query(Recipe.class)
+                .distinct("cuisine")
+                .as(String.class)
+                .all();
+        } catch (Exception e) {
+            logger.error("Error fetching cuisines", e);
+            return List.of();
+        }
+    }
+
+    public long getTotalRecipeCount() {
+        try {
+            return recipeRepository.count();
+        } catch (Exception e) {
+            logger.error("Error counting recipes", e);
+            return 0;
+        }
+    }
+
+    public List<Recipe> findByCuisine(String cuisine) {
+        try {
+            return recipeRepository.findByCuisine(cuisine);
+        } catch (Exception e) {
+            logger.error("Error finding recipes by cuisine: {}", cuisine, e);
+            return List.of();
+        }
+    }
+}

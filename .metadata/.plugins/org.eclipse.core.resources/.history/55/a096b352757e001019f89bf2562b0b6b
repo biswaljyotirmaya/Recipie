@@ -1,0 +1,32 @@
+package com.jb.service;
+
+import java.util.List;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.stereotype.Service;
+
+import com.jb.entity.Recipe;
+import com.jb.repository.RecipeRepository;
+
+@Service
+public class RecipeService {
+	@Autowired
+	private RecipeRepository recipeRepository;
+
+	public Page<Recipe> getAllRecipes(int page, int limit) {
+		Pageable pageable = PageRequest.of(page - 1, limit, Sort.by("rating").descending());
+		return recipeRepository.findAll(pageable);
+	}
+
+	public List<Recipe> searchRecipes(String title, String cuisine, Float minRating, Float maxRating,
+			Integer maxTotalTime) {
+		// Custom search logic with Specification
+		// e.g. filter title LIKE, rating >=, etc.
+		// I'll expand this with JPA Specification
+		return recipeRepository.findAll(RecipeSpecification.search(title, cuisine, minRating, maxRating, maxTotalTime));
+	}
+}

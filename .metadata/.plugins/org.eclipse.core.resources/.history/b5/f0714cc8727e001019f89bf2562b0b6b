@@ -1,0 +1,4 @@
+public interface RecipeRepository extends JpaRepository<Recipe, Long>, JpaSpecificationExecutor<Recipe> {
+    List<Recipe> findByTitleContainingIgnoreCase(String title);
+    List<Recipe> findByCuisine(String cuisine);
+}

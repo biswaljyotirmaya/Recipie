@@ -1,0 +1,314 @@
+package com.jb.service;
+
+import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
+
+import com.fasterxml.jackson.core.json.JsonReadFeature;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.json.JsonMapper;
+
+import jakarta.annotation.PostConstruct;
+
+@Service
+public class RecipeService {
+
+    private static final Logger logger = LoggerFactory.getLogger(RecipeService.class);
+
+    @Autowired
+    private MongoTemplate mongoTemplate;
+
+    private static final String COLLECTION_NAME = "recipes";
+
+    @PostConstruct
+    public void loadRecipes() {
+        try {
+            // Check if collection already has data
+            if (mongoTemplate.collectionExists(COLLECTION_NAME) && 
+                mongoTemplate.estimatedCount(COLLECTION_NAME) > 0) {
+                logger.info("Recipes already loaded. Skipping initialization.");
+                return;
+            }
+
+            List<Map<String, Object>> recipes = readRecipesFromJson("/US_recipes.json");
+            
+            if (recipes == null || recipes.isEmpty()) {
+                logger.warn("No recipes found to load.");
+                return;
+            }
+
+            // Process and save all recipes
+            List<Map<String, Object>> processedRecipes = recipes.stream()
+                .filter(Objects::nonNull)
+                .peek(this::sanitizeRecipe)
+                .toList();
+
+            mongoTemplate.insert(processedRecipes, COLLECTION_NAME);
+            logger.info("Loaded {} recipes successfully.", processedRecipes.size());
+            
+        } catch (Exception e) {
+            logger.error("Failed to load recipes during initialization", e);
+        }
+    }
+
+    private List<Map<String, Object>> readRecipesFromJson(String path) {
+        try (InputStream is = getClass().getResourceAsStream(path)) {
+            if (is == null) {
+                logger.warn("JSON file '{}' not found in resources!", path);
+                return List.of();
+            }
+
+            ObjectMapper mapper = JsonMapper.builder()
+                .enable(JsonReadFeature.ALLOW_NON_NUMERIC_NUMBERS)
+                .build();
+
+            // Read the entire JSON structure
+            JsonNode rootNode = mapper.readTree(is);
+            
+            List<Map<String, Object>> recipes = new ArrayList<>();
+            
+            // Iterate through all root level properties (0, 1, 2, etc.)
+            rootNode.fields().forEachRemaining(entry -> {
+                JsonNode recipeNode = entry.getValue();
+                if (recipeNode.isObject()) {
+                    Map<String, Object> recipeMap = mapper.convertValue(recipeNode, new TypeReference<Map<String, Object>>() {});
+                    recipes.add(recipeMap);
+                }
+            });
+            
+            return recipes;
+            
+        } catch (Exception e) {
+            logger.error("Failed to read recipes JSON from path: {}", path, e);
+            return List.of();
+        }
+    }
+
+    private void sanitizeRecipe(Map<String, Object> recipe) {
+        if (recipe == null) return;
+
+        // Clean rating
+        if (recipe.containsKey("rating")) {
+            Object rating = recipe.get("rating");
+            if (rating instanceof Number) {
+                double ratingValue = ((Number) rating).doubleValue();
+                if (Double.isNaN(ratingValue) || Double.isInfinite(ratingValue)) {
+                    recipe.put("rating", null);
+                }
+            }
+        }
+
+        // Clean negative times
+        cleanNegativeTime(recipe, "prep_time");
+        cleanNegativeTime(recipe, "cook_time");
+        cleanNegativeTime(recipe, "total_time");
+
+        // Handle nutrients - ensure it's a proper map
+        if (recipe.containsKey("nutrients")) {
+            Object nutrients = recipe.get("nutrients");
+            if (!(nutrients instanceof Map)) {
+                recipe.put("nutrients", new HashMap<String, Object>());
+            }
+        } else {
+            recipe.put("nutrients", new HashMap<String, Object>());
+        }
+
+        // Parse calories from nutrients if available
+        parseCalories(recipe);
+    }
+
+    private void cleanNegativeTime(Map<String, Object> recipe, String timeField) {
+        if (recipe.containsKey(timeField)) {
+            Object time = recipe.get(timeField);
+            if (time instanceof Number) {
+                int timeValue = ((Number) time).intValue();
+                if (timeValue < 0) {
+                    recipe.put(timeField, null);
+                }
+            }
+        }
+    }
+
+    private void parseCalories(Map<String, Object> recipe) {
+        if (recipe.containsKey("nutrients")) {
+            Object nutrientsObj = recipe.get("nutrients");
+            if (nutrientsObj instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> nutrients = (Map<String, Object>) nutrientsObj;
+                
+                if (nutrients.containsKey("calories")) {
+                    Object caloriesObj = nutrients.get("calories");
+                    if (caloriesObj instanceof String) {
+                        String caloriesStr = (String) caloriesObj;
+                        if (caloriesStr.endsWith(" kcal")) {
+                            try {
+                                float caloriesValue = Float.parseFloat(caloriesStr.replace(" kcal", "").trim());
+                                recipe.put("calories", caloriesValue);
+                            } catch (NumberFormatException e) {
+                                recipe.put("calories", null);
+                                logger.debug("Failed to parse calories: {}", caloriesStr);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    public Page<Map<String, Object>> getAllRecipes(int page, int limit) {
+        try {
+            Pageable pageable = PageRequest.of(
+                Math.max(0, page - 1), 
+                Math.max(1, limit), 
+                Sort.by("rating").descending().and(Sort.by("title"))
+            );
+            
+            Query query = new Query().with(pageable);
+            List<Map<String, Object>> content = mongoTemplate.find(query, Map.class, COLLECTION_NAME);
+            long total = mongoTemplate.count(new Query(), COLLECTION_NAME);
+            
+            return new PageImpl<>(content, pageable, total);
+        } catch (Exception e) {
+            logger.error("Error fetching all recipes", e);
+            return Page.empty();
+        }
+    }
+
+    public Page<Map<String, Object>> searchRecipes(String title, String cuisine, Float minRating, Float maxRating,
+            Integer maxTotalTime, Float maxCalories, int page, int limit) {
+
+        try {
+            Query query = new Query();
+            Criteria criteria = new Criteria();
+
+            List<Criteria> criteriaList = new ArrayList<>();
+
+            if (StringUtils.hasText(title))
+                criteriaList.add(Criteria.where("title").regex(title, "i"));
+            
+            if (StringUtils.hasText(cuisine))
+                criteriaList.add(Criteria.where("cuisine").is(cuisine));
+            
+            if (minRating != null)
+                criteriaList.add(Criteria.where("rating").gte(minRating));
+            
+            if (maxRating != null)
+                criteriaList.add(Criteria.where("rating").lte(maxRating));
+            
+            if (maxTotalTime != null)
+                criteriaList.add(Criteria.where("total_time").lte(maxTotalTime));
+            
+            if (maxCalories != null)
+                criteriaList.add(Criteria.where("calories").lte(maxCalories));
+
+            if (!criteriaList.isEmpty()) {
+                query.addCriteria(criteria.andOperator(criteriaList.toArray(new Criteria[0])));
+            }
+
+            long total = mongoTemplate.count(query, COLLECTION_NAME);
+
+            Pageable pageable = PageRequest.of(
+                Math.max(0, page - 1), 
+                Math.max(1, limit), 
+                Sort.by("rating").descending().and(Sort.by("title"))
+            );
+            
+            query.with(pageable);
+            List<Map<String, Object>> content = mongoTemplate.find(query, Map.class, COLLECTION_NAME);
+
+            return new PageImpl<>(content, pageable, total);
+            
+        } catch (Exception e) {
+            logger.error("Error searching recipes", e);
+            return Page.empty();
+        }
+    }
+
+    // Additional utility methods
+    public Map<String, Object> findById(String id) {
+        try {
+            Query query = new Query(Criteria.where("_id").is(id));
+            return mongoTemplate.findOne(query, Map.class, COLLECTION_NAME);
+        } catch (Exception e) {
+            logger.error("Error finding recipe by id: {}", id, e);
+            return null;
+        }
+    }
+
+    public List<String> findAllCuisines() {
+        try {
+            return mongoTemplate.query(Map.class)
+                .inCollection(COLLECTION_NAME)
+                .distinct("cuisine")
+                .as(String.class)
+                .all();
+        } catch (Exception e) {
+            logger.error("Error fetching cuisines", e);
+            return List.of();
+        }
+    }
+
+    public List<String> findAllFields() {
+        try {
+            // Sample a document to get all field names
+            Map<String, Object> sample = mongoTemplate.findOne(
+                new Query().limit(1), Map.class, COLLECTION_NAME);
+            
+            if (sample != null) {
+                return new ArrayList<>(sample.keySet());
+            }
+            return List.of();
+        } catch (Exception e) {
+            logger.error("Error fetching field names", e);
+            return List.of();
+        }
+    }
+
+    public long getTotalRecipeCount() {
+        try {
+            return mongoTemplate.estimatedCount(COLLECTION_NAME);
+        } catch (Exception e) {
+            logger.error("Error counting recipes", e);
+            return 0;
+        }
+    }
+
+    public List<Map<String, Object>> findByField(String fieldName, Object value) {
+        try {
+            Query query = new Query(Criteria.where(fieldName).is(value));
+            return mongoTemplate.find(query, Map.class, COLLECTION_NAME);
+        } catch (Exception e) {
+            logger.error("Error finding recipes by field {}: {}", fieldName, value, e);
+            return List.of();
+        }
+    }
+
+    public List<Map<String, Object>> findByFieldRegex(String fieldName, String regex) {
+        try {
+            Query query = new Query(Criteria.where(fieldName).regex(regex, "i"));
+            return mongoTemplate.find(query, Map.class, COLLECTION_NAME);
+        } catch (Exception e) {
+            logger.error("Error finding recipes by field regex {}: {}", fieldName, regex, e);
+            return List.of();
+        }
+    }
+}
